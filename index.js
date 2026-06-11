@@ -6,6 +6,10 @@ const { getFlByLineUser } = require('./src/flCodes');
 const { notifySlack } = require('./src/slack');
 const { matchPattern } = require('./src/replyPatterns');
 
+if (typeof WebSocket === 'undefined') {
+  global.WebSocket = require('ws');
+}
+
 const _sb = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_KEY
