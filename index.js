@@ -2,7 +2,6 @@ require('dotenv').config();
 const express = require('express');
 const line = require('@line/bot-sdk');
 const { createClient } = require('@supabase/supabase-js');
-const { getFlByLineUser } = require('./src/flCodes');
 const { notifySlack } = require('./src/slack');
 const { matchPattern } = require('./src/replyPatterns');
 
@@ -14,6 +13,21 @@ const _sb = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_KEY
 );
+
+// SupabaseからFL紐付けを取得（簡易キャッシュ付き）
+const _flCache = {};
+let _flCacheAt = 0;
+async function getFlByLineUser(lineUserId) {
+  const now = Date.now();
+  if (now - _flCacheAt > 5 * 60 * 1000) {
+    const { data } = await _sb.from('line_user_fl_map').select('line_user_id,fl_code,display_name');
+    if (data) {
+      data.forEach(r => { _flCache[r.line_user_id] = { fl: r.fl_code, name: r.display_name }; });
+      _flCacheAt = now;
+    }
+  }
+  return _flCache[lineUserId] || null;
+}
 
 async function saveLineMessage(caseFL, lineUserId, customerName, messageText, category, replies) {
   const now = new Date().toISOString();
@@ -42,14 +56,12 @@ const client = new line.messagingApi.MessagingApiClient({
 
 const app = express();
 
-// ヘルスチェック（Cloud Run用）
 app.get('/', (req, res) => res.send('FunLink LINE Webhook OK'));
 
-// LINE Webhook
 app.post('/webhook',
   line.middleware(lineConfig),
   async (req, res) => {
-    res.sendStatus(200); // LINEには即レスポンス
+    res.sendStatus(200);
 
     const events = req.body.events || [];
     for (const event of events) {
@@ -58,30 +70,31 @@ app.post('/webhook',
       const lineUserId = event.source.userId;
       const messageText = event.message.text;
 
-      // プロフィール取得
       let customerName = '不明';
       try {
         const profile = await client.getProfile(lineUserId);
         customerName = profile.displayName;
       } catch (_) {}
 
-      // FLコード照合
-      const caseInfo = getFlByLineUser(lineUserId);
+      const caseInfo = await getFlByLineUser(lineUserId);
 
-      // パターンマッチで返信案を生成
+      // FL紐付けがある場合、display_nameも更新
+      if (caseInfo && customerName !== '不明') {
+        _sb.from('line_user_fl_map').update({ display_name: customerName })
+          .eq('line_user_id', lineUserId).then(() => {});
+      }
+
       const { category, replies } = matchPattern(messageText);
 
-      // Supabase に保存
       try {
         await saveLineMessage(caseInfo ? caseInfo.fl : null, lineUserId, customerName, messageText, category, replies);
+        console.log(`[${new Date().toISOString()}] 保存: ${customerName} → ${caseInfo ? caseInfo.fl : lineUserId} [${category}]`);
       } catch (e) {
         console.error('Supabase save error:', e.message);
       }
 
-      // Slack に通知
       try {
         await notifySlack({ lineUserId, customerName, message: messageText, caseInfo, category, replies });
-        console.log(`[${new Date().toISOString()}] Slack通知送信: ${customerName} [${category}] → ${messageText.slice(0, 50)}`);
       } catch (e) {
         console.error('Slack error:', e.message);
       }
