@@ -13,24 +13,18 @@ const _sb = createClient(
 
 async function saveLineMessage(caseFL, lineUserId, customerName, messageText, category, replies) {
   const now = new Date().toISOString();
-  // cms_storeのmainレコードを取得して更新
-  const { data, error } = await _sb.from('cms_store').select('data').eq('id','main').single();
-  const store = (data && data.data) ? data.data : {};
-  if (!store.lineMessages) store.lineMessages = [];
-  store.lineMessages.push({
+  await _sb.from('line_messages').insert({
     id: Date.now().toString(36) + Math.random().toString(36).slice(2),
-    caseFL: caseFL || lineUserId,
-    date: now.slice(0,10),
+    case_fl: caseFL || lineUserId,
+    date: now.slice(0, 10),
     sender: '顧客',
+    sender_name: customerName || '',
     category: category,
-    message: messageText,
-    replyDraft: replies[0] || '',
+    message: messageText.slice(0, 500),
+    reply_draft: replies[0] || '',
     status: '未対応',
-    createdAt: now,
-    lineUserId: lineUserId,
-    customerName: customerName,
+    created_at: now,
   });
-  await _sb.from('cms_store').upsert({ id:'main', data:store, updated_at: now });
 }
 
 const lineConfig = {
